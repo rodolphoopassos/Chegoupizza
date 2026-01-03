@@ -1,0 +1,9 @@
+{
+  "name": "ChegouPizza",
+  "description": "A comprehensive management dashboard for pizzerias with Gemini AI integration for business insights and creative recipe generation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
