@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   PieChart, 
@@ -52,6 +51,23 @@ interface TopItem {
   name: string;
   count: number;
 }
+
+// Helper to prevent [object Object]
+const safeString = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'boolean') return val ? 'Sim' : 'Não';
+  if (typeof val === 'object') {
+    const candidate = val.name || val.title || val.label || val.description || val.nome;
+    if (candidate !== undefined && candidate !== null) {
+       if (typeof candidate === 'object') return safeString(candidate);
+       return String(candidate);
+    }
+    return '';
+  }
+  return String(val);
+};
 
 // --- AUDIO UTILS PARA GEMINI LIVE ---
 function encodeBase64(bytes: Uint8Array) {
@@ -235,7 +251,7 @@ export const DashboardView = ({ transactions }: DashboardViewProps) => {
       - Pedidos: ${stats.periodOrders}
       - Ticket Médio: ${formatMoney(stats.averageTicket)}
       - Saldo Operacional: ${formatMoney(expenseStats.balance)}
-      - Mais Vendido: ${topItems[0]?.name || 'N/A'}
+      - Mais Vendido: ${safeString(topItems[0]?.name || 'N/A')}
       - Total Despesas: ${formatMoney(expenseStats.expense)}
 
       Instruções de Voz:
@@ -246,7 +262,7 @@ export const DashboardView = ({ transactions }: DashboardViewProps) => {
       Comece se apresentando brevemente e comentando o faturamento do período.`;
 
       const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
@@ -531,7 +547,7 @@ export const DashboardView = ({ transactions }: DashboardViewProps) => {
                             </div>
                           </div>
                           <span className="text-[9px] font-black uppercase tracking-widest text-stone-400 whitespace-nowrap">
-                            {String(data.dayName)}
+                            {safeString(data.dayName)}
                           </span>
                       </div>
                     );
@@ -578,7 +594,7 @@ export const DashboardView = ({ transactions }: DashboardViewProps) => {
                    </div>
                    <p className="text-sm font-bold leading-relaxed mb-6">
                       {expenseStats.balance > 0 ? 
-                        `Seu saldo operacional está positivo em ${formatMoney(expenseStats.balance)}. Ótimo momento para intensificar promoções do item "${topItems[0]?.name || 'mais vendido'}".` :
+                        `Seu saldo operacional está positivo em ${formatMoney(expenseStats.balance)}. Ótimo momento para intensificar promoções do item "${safeString(topItems[0]?.name) || 'mais vendido'}".` :
                         "Atenção: Suas despesas excederam as vendas de pedidos neste período. Recomendo analisar compras de insumos."
                       }
                    </p>
@@ -611,7 +627,7 @@ export const DashboardView = ({ transactions }: DashboardViewProps) => {
                 <span className="text-[10px] font-black text-stone-400 uppercase tracking-widest">Top Sabor</span>
              </div>
              <p className="text-[10px] font-bold text-stone-500 uppercase mb-1 tracking-widest">O Favorito da Galera</p>
-             <h4 className="text-3xl font-black text-stone-800 dark:text-white tracking-tighter truncate uppercase">{topItems[0]?.name || '---'}</h4>
+             <h4 className="text-3xl font-black text-stone-800 dark:text-white tracking-tighter truncate uppercase">{safeString(topItems[0]?.name) || '---'}</h4>
              <div className="flex items-center gap-2 mt-4">
                 <div className="bg-orange-500/20 px-2 py-0.5 rounded text-[9px] font-black text-orange-600 uppercase">{topItems[0]?.count || 0} VENDIDOS</div>
              </div>

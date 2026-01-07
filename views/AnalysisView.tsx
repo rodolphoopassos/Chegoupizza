@@ -19,15 +19,25 @@ import {
 } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { GoogleGenAI } from "@google/genai";
-import { Recipe, StockItem, Transaction } from '../types';
+import { Transaction } from '../types';
+
+interface ProductAnalysis {
+  id: number;
+  name: string;
+  category: string;
+  sale_price: number;
+  cmv: number;
+  profit: number;
+  margin: number;
+  markup: number;
+}
 
 interface AnalysisViewProps {
   user: any;
 }
 
 export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [stockItems, setStockItems] = useState<StockItem[]>([]);
+  const [analysisData, setAnalysisData] = useState<ProductAnalysis[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAiLoading, setIsAiLoading] = useState(false);
@@ -37,70 +47,109 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
     setLoading(true);
     if (!user) return;
 
-    if (user.id === 'demo-user') {
-      setStockItems([
-        { id: '1', name: 'Massa', cost_per_unit: 2.5, unit: 'UN', stock_quantity: 100, min_stock: 10, code: 'S01', supplier: 'Moinho' },
-        { id: '2', name: 'Mussarela', cost_per_unit: 45.0, unit: 'KG', stock_quantity: 10, min_stock: 2, code: 'S02', supplier: 'Laticínios' },
-        { id: '3', name: 'Calabresa', cost_per_unit: 32.0, unit: 'KG', stock_quantity: 8, min_stock: 2, code: 'S03', supplier: 'Sadia' }
-      ]);
-      setRecipes([
-        { id: 'r1', name: 'Pizza Calabresa G', code: 'P01', sale_price: 49.90, ingredients: [{ stockId: '1', quantity: 1 }, { stockId: '2', quantity: 0.350 }, { stockId: '3', quantity: 0.200 }] },
-        { id: 'r2', name: 'Pizza Margherita P', code: 'P02', sale_price: 34.90, ingredients: [{ stockId: '1', quantity: 1 }, { stockId: '2', quantity: 0.400 }] },
-        { id: 'r3', name: 'Pizza Frango c/ Catupiry', code: 'P03', sale_price: 55.00, ingredients: [{ stockId: '1', quantity: 1 }, { stockId: '2', quantity: 0.200 }, { stockId: '3', quantity: 0.500 }] }
-      ]);
-      setTransactions([
-        { id: 't1', description: 'Aluguel', amount: 3500, type: 'expense', category: 'Fixo', date: new Date() },
-        { id: 't2', description: 'Energia', amount: 850, type: 'expense', category: 'Variável', date: new Date() }
-      ]);
-      setLoading(false);
-      return;
-    }
+    try {
+        // --- MODO DEMO ---
+        if (user.id === 'demo-user') {
+            setAnalysisData([
+                { id: 1, name: 'PIZZA CALABRESA', category: 'Pizzas', sale_price: 45.00, cmv: 12.50, profit: 32.50, margin: 72.2, markup: 3.6 },
+                { id: 2, name: 'PIZZA PORTUGUESA', category: 'Pizzas', sale_price: 52.00, cmv: 18.00, profit: 34.00, margin: 65.4, markup: 2.8 },
+                { id: 3, name: 'REFRIGERANTE 2L', category: 'Bebidas', sale_price: 14.00, cmv: 7.50, profit: 6.50, margin: 46.4, markup: 1.8 }
+            ]);
+            setTransactions([
+                { id: 't1', description: 'Aluguel', amount: 3500, type: 'expense', category: 'Fixo', date: new Date() },
+                { id: 't2', description: 'Energia', amount: 850, type: 'expense', category: 'Variável', date: new Date() }
+            ]);
+            setLoading(false);
+            return;
+        }
 
-    const { data: stock } = await supabase.from('stock').select('*').eq('user_id', user.id);
-    const { data: rec } = await supabase.from('recipes').select('*').eq('user_id', user.id);
-    const { data: trans } = await supabase.from('transactions').select('*').eq('user_id', user.id);
-    
-    if (stock) setStockItems(stock);
-    if (rec) setRecipes(rec);
-    if (trans) setTransactions(trans);
-    setLoading(false);
+        // --- MODO REAL (Sincronizado com Engenharia de Cardápio) ---
+        
+        // 1. Busca Produtos (Cardápio) para pegar o preço de venda atualizado
+        const { data: products } = await supabase
+            .from('cardapio')
+            .select('id, nome, preco, categoria')
+            .order('nome');
+        
+        // 2. Busca Receitas (Composição dos produtos)
+        const { data: recipes } = await supabase
+            .from('receitas_ingredientes')
+            .select('*');
+        
+        // 3. Busca Estoque (Custos atualizados dos insumos)
+        const { data: stock } = await supabase
+            .from('estoque')
+            .select('id, cost_per_unit');
+        
+        // 4. Busca Transações (Para cálculo de Break-Even / Custos Fixos)
+        const { data: trans } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('user_id', user.id);
+
+        if (products && recipes && stock) {
+            const computedStats = products.map((prod: any) => {
+                // Filtra os ingredientes vinculados a este produto (via recipe_id)
+                const prodIngredients = recipes.filter((r: any) => r.recipe_id === prod.id);
+                
+                // Calcula CMV somando (quantidade * custo_unitario_do_estoque)
+                const cmv = prodIngredients.reduce((total: number, item: any) => {
+                    const stockItem = stock.find((s: any) => s.id === item.stock_id);
+                    const cost = Number(stockItem?.cost_per_unit || 0);
+                    const qty = Number(item.quantity || 0);
+                    return total + (cost * qty);
+                }, 0);
+
+                const price = Number(prod.preco || 0);
+                const profit = price - cmv;
+                const margin = price > 0 ? (profit / price) * 100 : 0;
+                const markup = cmv > 0 ? (price / cmv) : 0;
+
+                return {
+                    id: prod.id,
+                    name: prod.nome,
+                    category: prod.categoria,
+                    sale_price: price,
+                    cmv,
+                    profit,
+                    margin,
+                    markup
+                };
+            });
+
+            // Ordena do mais rentável para o menos rentável
+            setAnalysisData(computedStats.sort((a, b) => b.margin - a.margin));
+        }
+
+        if (trans) {
+            setTransactions(trans.map((t:any) => ({...t, date: new Date(t.date)})));
+        }
+
+    } catch (e) {
+        console.error("Erro ao sincronizar dados de engenharia:", e);
+    } finally {
+        setLoading(false);
+    }
   };
 
   useEffect(() => { fetchData(); }, [user]);
 
-  const calculateCMV = (ingredients: any[]) => {
-    return ingredients.reduce((acc, ing) => {
-      const item = stockItems.find(s => s.id === ing.stockId);
-      return acc + (item ? item.cost_per_unit * ing.quantity : 0);
-    }, 0);
-  };
-
-  const recipeStats = useMemo(() => {
-    return recipes.map(r => {
-      const cmv = calculateCMV(r.ingredients);
-      const profit = r.sale_price - cmv;
-      const margin = r.sale_price > 0 ? (profit / r.sale_price) * 100 : 0;
-      const markup = cmv > 0 ? (r.sale_price / cmv) : 0;
-      return { ...r, cmv, profit, margin, markup };
-    }).sort((a, b) => b.margin - a.margin);
-  }, [recipes, stockItems]);
-
   const financialSummary = useMemo(() => {
-    const fixedExpenses = transactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
-    const avgMargin = recipeStats.length > 0 ? recipeStats.reduce((acc, r) => acc + r.margin, 0) / recipeStats.length : 0;
+    const fixedExpenses = transactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+    const avgMargin = analysisData.length > 0 ? analysisData.reduce((acc, r) => acc + r.margin, 0) / analysisData.length : 0;
     const breakEven = avgMargin > 0 ? (fixedExpenses / (avgMargin / 100)) : 0;
 
     return { fixedExpenses, avgMargin, breakEven };
-  }, [transactions, recipeStats]);
+  }, [transactions, analysisData]);
 
   const getProfitConsultancy = async () => {
     setIsAiLoading(true);
     setAiAnalysis(null);
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const dataStr = recipeStats.map(r => `${r.name}: Preço R$${r.sale_price}, Margem ${r.margin.toFixed(1)}%, CMV R$${r.cmv.toFixed(2)}`).join(' | ');
+      const dataStr = analysisData.slice(0, 8).map(r => `${r.name}: Preço R$${r.sale_price}, Margem ${r.margin.toFixed(1)}%, CMV R$${r.cmv.toFixed(2)}`).join(' | ');
       
-      const prompt = `Como um consultor financeiro de alto nível para pizzarias, analise os seguintes pratos e margens: ${dataStr}. 
+      const prompt = `Como um consultor financeiro de alto nível para pizzarias, analise os seguintes pratos e margens (Top 8): ${dataStr}. 
       Identifique os 2 maiores problemas de lucro e sugira ações práticas (ex: aumentar preço, trocar ingrediente, promoção combo). 
       Seja direto, profissional e use um tom focado em resultado comercial. Responda em Português (máx 500 caracteres).`;
 
@@ -108,7 +157,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
         model: 'gemini-3-flash-preview',
         contents: prompt
       });
-      setAiAnalysis(response.text);
+      setAiAnalysis(response.text || "Sem resposta da IA.");
     } catch (e) {
       setAiAnalysis("Falha ao conectar com o estrategista de IA. Verifique sua chave API.");
     } finally {
@@ -119,7 +168,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
   if (loading) return (
     <div className="flex flex-col items-center justify-center h-full py-20 gap-4">
       <Loader2 className="animate-spin text-blue-600" size={40}/>
-      <p className="text-stone-500 font-bold uppercase tracking-widest text-xs">Calculando Margens de Lucro...</p>
+      <p className="text-stone-500 font-bold uppercase tracking-widest text-xs">Sincronizando com Engenharia de Cardápio...</p>
     </div>
   );
 
@@ -130,12 +179,12 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
           <h2 className="text-3xl font-black text-stone-800 dark:text-white uppercase tracking-tighter flex items-center gap-3">
             <BarChart3 className="text-blue-600" size={32} /> Margens & Lucro
           </h2>
-          <p className="text-stone-500 dark:text-stone-400 text-xs font-bold uppercase tracking-widest mt-1">Análise Estratégica de Engenharia de Cardápio</p>
+          <p className="text-stone-500 dark:text-stone-400 text-xs font-bold uppercase tracking-widest mt-1">Dados sincronizados com Fichas Técnicas</p>
         </div>
         
         <button 
           onClick={getProfitConsultancy}
-          disabled={isAiLoading || recipes.length === 0}
+          disabled={isAiLoading || analysisData.length === 0}
           className="bg-blue-600 hover:bg-blue-700 text-white font-black py-3 px-8 rounded-2xl flex items-center gap-2 shadow-lg shadow-blue-900/20 transition-all active:scale-95 disabled:opacity-50"
         >
           {isAiLoading ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
@@ -207,7 +256,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
         <div className="p-8 border-b border-stone-100 dark:border-stone-800 flex flex-col md:flex-row justify-between items-center gap-4">
            <div>
               <h3 className="text-xl font-black text-stone-800 dark:text-white uppercase tracking-tight">Ranking de Rentabilidade</h3>
-              <p className="text-xs text-stone-400 font-bold uppercase tracking-widest">Pratos classificados por margem de contribuição</p>
+              <p className="text-xs text-stone-400 font-bold uppercase tracking-widest">Pratos classificados por margem de contribuição (Dados em tempo real)</p>
            </div>
            <div className="flex gap-2">
               <span className="flex items-center gap-1 text-[10px] font-black text-green-500 uppercase bg-green-50 dark:bg-green-900/20 px-3 py-1 rounded-full">Ouro (&gt;70%)</span>
@@ -230,9 +279,9 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
-              {recipeStats.map(r => (
+              {analysisData.map(r => (
                 <tr key={r.id} className="hover:bg-stone-50 dark:hover:bg-stone-800/30 transition-colors group">
-                  <td className="p-6 font-black text-stone-800 dark:text-stone-200 group-hover:text-blue-600 transition-colors">{r.name}</td>
+                  <td className="p-6 font-black text-stone-800 dark:text-stone-200 group-hover:text-blue-600 transition-colors uppercase">{r.name}</td>
                   <td className="p-6 text-center font-mono text-stone-500">R$ {r.cmv.toFixed(2)}</td>
                   <td className="p-6 text-center font-black text-stone-800 dark:text-white">R$ {r.sale_price.toFixed(2)}</td>
                   <td className="p-6 text-center text-stone-400 font-bold">{r.markup.toFixed(2)}x</td>
@@ -244,7 +293,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
                        <div className="w-16 h-1 bg-stone-100 dark:bg-stone-800 rounded-full overflow-hidden">
                           <div 
                             className={`h-full ${r.margin > 70 ? 'bg-green-500' : r.margin > 60 ? 'bg-orange-500' : 'bg-red-500'}`}
-                            style={{ width: `${Math.min(100, r.margin)}%` }}
+                            style={{ width: `${Math.min(100, Math.max(0, r.margin))}%` }}
                           />
                        </div>
                     </div>
@@ -267,13 +316,13 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ user }) => {
                   </td>
                 </tr>
               ))}
-              {recipeStats.length === 0 && (
+              {analysisData.length === 0 && (
                 <tr>
                    <td colSpan={7} className="p-20 text-center">
                       <div className="bg-stone-100 dark:bg-stone-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
                         <Scale size={32} className="text-stone-300"/>
                       </div>
-                      <p className="text-stone-400 font-bold uppercase tracking-widest text-xs">Cadastre Fichas Técnicas para ver a análise</p>
+                      <p className="text-stone-400 font-bold uppercase tracking-widest text-xs">Cadastre Fichas Técnicas na aba "Fichas Técnicas" para ver a análise</p>
                    </td>
                 </tr>
               )}

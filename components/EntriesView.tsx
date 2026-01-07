@@ -24,9 +24,16 @@ import { Transaction, TransactionType } from '../types';
 import { GoogleGenAI } from "@google/genai";
 import { supabase } from '../supabaseClient';
 
-const safeString = (val: any) => {
-  if (typeof val === 'object' && val !== null) {
-    return val.description || val.nome || val.name || JSON.stringify(val);
+const safeString = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'object') {
+    const candidate = val.description || val.nome || val.name || val.title;
+    if (candidate && (typeof candidate === 'string' || typeof candidate === 'number')) {
+      return String(candidate);
+    }
+    return ''; 
   }
   return String(val || '');
 };
@@ -180,7 +187,7 @@ export const EntriesView: React.FC<EntriesViewProps> = ({ onAdd, transactions, o
       for (const item of scannedInvoice.items) {
         if (item.isStockMaterial && user.id !== 'demo-user') {
           const { data: existingStock } = await supabase
-            .from('stock')
+            .from('estoque')
             .select('*')
             .eq('user_id', user.id)
             .ilike('name', `%${safeString(item.description).split(' ')[0]}%`)
@@ -189,13 +196,13 @@ export const EntriesView: React.FC<EntriesViewProps> = ({ onAdd, transactions, o
           if (existingStock && existingStock.length > 0) {
             const stockId = existingStock[0].id;
             const newQty = (existingStock[0].stock_quantity || 0) + (item.quantity || 0);
-            await supabase.from('stock').update({
+            await supabase.from('estoque').update({
               stock_quantity: newQty,
               cost_per_unit: item.unitPrice || existingStock[0].cost_per_unit,
               supplier: safeString(scannedInvoice.establishmentName)
             }).eq('id', stockId);
           } else {
-            await supabase.from('stock').insert({
+            await supabase.from('estoque').insert({
               name: safeString(item.description).toUpperCase(),
               code: `SCAN-${Math.floor(Math.random() * 10000)}`,
               unit: item.unit || 'UN',

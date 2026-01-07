@@ -201,7 +201,7 @@ const CategoryManagerModal = ({
 };
 
 // --- COMPONENTE PRINCIPAL ---
-export const MenuEditorView: React.FC<MenuEditorViewProps> = ({ user }) => {
+export const MenuEditorView = ({ user }: MenuEditorViewProps) => {
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState('Todas');

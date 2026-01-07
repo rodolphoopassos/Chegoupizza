@@ -22,6 +22,27 @@ interface InventoryPageProps {
   user?: any;
 }
 
+// --- FUNÇÃO BLINDADA (SAFE STRING) ---
+// Evita erros de renderização como [object Object]
+const safeString = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'boolean') return val ? 'Sim' : 'Não';
+  
+  if (typeof val === 'object') {
+    const candidate = val.name || val.nome || val.label || val.description || val.code || val.unit;
+    if (candidate !== undefined && candidate !== null) {
+        if (typeof candidate === 'object') return safeString(candidate); // Recursividade para objetos aninhados
+        return String(candidate);
+    }
+    return '';
+  }
+  
+  return String(val);
+};
+
 const ConfirmModal = ({ isOpen, onCancel, onConfirm, title, message, loading }: any) => {
   if (!isOpen) return null;
   return (
@@ -66,12 +87,14 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
   
   const [confirmDelete, setConfirmDelete] = useState<{ id: string, isOpen: boolean }>({ id: '', isOpen: false });
 
+  // Estado do formulário usando 'quantity' conforme estrutura do banco
   const [formData, setFormData] = useState({
     name: '',
+    category: '',
     code: '',
     unit: 'KG',
     min_stock: '10',
-    stock_quantity: '0',
+    quantity: '0', 
     cost_per_unit: '0',
     supplier: ''
   });
@@ -83,12 +106,12 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
     if (user.id === 'demo-user') {
       if (items.length === 0) {
         setItems([
-          { id: '1', code: '05601252231164', name: 'AZEITE OLIV GALLO EX VIR VD 500ML', stock_quantity: 1.00, min_stock: 5.00, unit: 'UN', cost_per_unit: 33.69 },
-          { id: '2', code: '07896272004203', name: 'AZEITONA VDE VALE FERTIL SCAR DP 12', stock_quantity: 3.00, min_stock: 10.00, unit: 'UN', cost_per_unit: 8.49 },
-          { id: '3', code: '07893000444232', name: 'LING CALAB SADIA TRAD PCT 2,5KG', stock_quantity: 1.00, min_stock: 5.00, unit: 'UN', cost_per_unit: 77.25 },
-          { id: '4', code: '02900000123335', name: 'LOMBO DEFUMADO FRIMESA KG', stock_quantity: 0.36, min_stock: 1.00, unit: 'KG', cost_per_unit: 66.35 },
-          { id: '5', code: '02900002214307', name: 'QUEIJO MUSS ARGE LA PAULINA BARR KG', stock_quantity: 3.55, min_stock: 10.00, unit: 'KG', cost_per_unit: 36.90 },
-          { id: '6', code: '07894900027013', name: 'REFRIG COCA COLA ORIG PET 2L', stock_quantity: 1.00, min_stock: 12.00, unit: 'UN', cost_per_unit: 10.99 },
+          { id: '1', code: '05601252231164', name: 'AZEITE OLIV GALLO EX VIR VD 500ML', category: 'Mercearia', quantity: 1.00, min_stock: 5.00, unit: 'UN', cost_per_unit: 33.69 },
+          { id: '2', code: '07896272004203', name: 'AZEITONA VDE VALE FERTIL SCAR DP 12', category: 'Conservas', quantity: 3.00, min_stock: 10.00, unit: 'UN', cost_per_unit: 8.49 },
+          { id: '3', code: '07893000444232', name: 'LING CALAB SADIA TRAD PCT 2,5KG', category: 'Frios', quantity: 1.00, min_stock: 5.00, unit: 'UN', cost_per_unit: 77.25 },
+          { id: '4', code: '02900000123335', name: 'LOMBO DEFUMADO FRIMESA KG', category: 'Frios', quantity: 0.36, min_stock: 1.00, unit: 'KG', cost_per_unit: 66.35 },
+          { id: '5', code: '02900002214307', name: 'QUEIJO MUSS ARGE LA PAULINA BARR KG', category: 'Laticínios', quantity: 3.55, min_stock: 10.00, unit: 'KG', cost_per_unit: 36.90 },
+          { id: '6', code: '07894900027013', name: 'REFRIG COCA COLA ORIG PET 2L', category: 'Bebidas', quantity: 1.00, min_stock: 12.00, unit: 'UN', cost_per_unit: 10.99 },
         ]);
       }
       setLoading(false);
@@ -96,16 +119,39 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
     }
 
     try {
+      // Consulta à tabela 'estoque' trazendo todos os campos
       const { data, error } = await supabase
-        .from('stock')
+        .from('estoque')
         .select('*')
         .eq('user_id', user.id)
-        .order('name', { ascending: true });
+        .order('id', { ascending: false });
 
       if (error) throw error;
-      setItems(data || []);
-    } catch (e) {
-      console.error(e);
+
+      if (data) {
+        // Mapeamento de segurança
+        const safeData = data.map(item => ({
+          ...item,
+          // Mapeia tanto quantity quanto stock_quantity para garantir compatibilidade
+          stock_quantity: Number(item.quantity ?? item.stock_quantity ?? 0),
+          quantity: Number(item.quantity ?? item.stock_quantity ?? 0),
+          
+          // Garante números
+          min_stock: Number(item.min_stock ?? item.min_quantity ?? 0),
+          cost_per_unit: Number(item.cost_per_unit ?? 0),
+          
+          // Strings seguras
+          name: safeString(item.name || 'Sem Nome'),
+          category: safeString(item.category || ''),
+          unit: safeString(item.unit || 'UN'),
+          code: safeString(item.code),
+          supplier: safeString(item.supplier)
+        }));
+        
+        setItems(safeData);
+      }
+    } catch (e: any) {
+      console.error('Erro ao buscar estoque:', e.message);
     } finally {
       setLoading(false);
     }
@@ -133,7 +179,7 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
       
       const prompt = `Analise este documento de compra (nota fiscal/romaneio).
       Extraia os itens de insumo. Retorne APENAS um array JSON:
-      [{"name": "NOME DO ITEM", "code": "EAN OU CODIGO", "unit": "KG/UN/LT", "stock_quantity": 0, "cost_per_unit": 0}]`;
+      [{"name": "NOME DO ITEM", "code": "EAN OU CODIGO", "unit": "KG/UN/LT", "quantity": 0, "cost_per_unit": 0, "category": "Categoria Sugerida"}]`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
@@ -144,11 +190,19 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
       if (jsonMatch) {
         const detected = JSON.parse(jsonMatch[0]);
         for (const item of detected) {
-          const payload = { ...item, user_id: user.id, min_stock: 10 };
+          const payload = { 
+            ...item, 
+            name: safeString(item.name),
+            category: safeString(item.category),
+            quantity: Number(item.quantity || item.stock_quantity || 0),
+            user_id: user.id, 
+            min_stock: 10 
+          };
+          
           if (user.id === 'demo-user') {
             setItems(prev => [{ ...payload, id: Math.random().toString() }, ...prev]);
           } else {
-            await supabase.from('stock').insert(payload);
+            await supabase.from('estoque').insert(payload);
           }
         }
         alert(`${detected.length} itens identificados com sucesso!`);
@@ -165,15 +219,19 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
 
   const handleEditClick = (item: any) => {
     setEditingId(item.id);
+    
+    // Carrega dados para edição, convertendo para string e protegendo contra null/undefined
     setFormData({
-      name: item.name,
-      code: item.code || '',
-      unit: item.unit,
-      min_stock: item.min_stock.toString(),
-      stock_quantity: item.stock_quantity.toString(),
-      cost_per_unit: item.cost_per_unit.toString(),
-      supplier: item.supplier || ''
+      name: safeString(item.name),
+      category: safeString(item.category),
+      code: safeString(item.code),
+      unit: safeString(item.unit),
+      min_stock: item.min_stock !== null ? String(item.min_stock) : '0',
+      quantity: item.quantity !== null ? String(item.quantity) : (item.stock_quantity ? String(item.stock_quantity) : '0'),
+      cost_per_unit: item.cost_per_unit !== null ? String(item.cost_per_unit) : '0',
+      supplier: safeString(item.supplier)
     });
+    
     setIsAddModalOpen(true);
   };
 
@@ -183,13 +241,17 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
     setIsSubmitting(true);
 
     const payload = {
-      name: formData.name.toUpperCase(),
-      code: formData.code || `${Math.floor(Math.random() * 1000000000000)}`,
-      unit: formData.unit,
-      min_stock: parseFloat(formData.min_stock),
-      stock_quantity: parseFloat(formData.stock_quantity),
-      cost_per_unit: parseFloat(formData.cost_per_unit),
-      supplier: formData.supplier.toUpperCase() || 'NÃO DEFINIDO',
+      name: safeString(formData.name).toUpperCase(),
+      category: safeString(formData.category).toUpperCase(),
+      code: safeString(formData.code) || `SCAN-${Math.floor(Math.random() * 10000)}`,
+      unit: safeString(formData.unit),
+      
+      // O .replace(',', '.') troca a vírgula por ponto antes de converter
+      min_stock: parseFloat(String(formData.min_stock).replace(',', '.')) || 0,
+      quantity: parseFloat(String(formData.quantity).replace(',', '.')) || 0,
+      cost_per_unit: parseFloat(String(formData.cost_per_unit).replace(',', '.')) || 0,
+      
+      supplier: safeString(formData.supplier).toUpperCase() || 'NÃO DEFINIDO',
       user_id: user.id
     };
 
@@ -202,9 +264,9 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
         }
       } else {
         if (editingId) {
-          await supabase.from('stock').update(payload).eq('id', editingId).eq('user_id', user.id);
+          await supabase.from('estoque').update(payload).eq('id', editingId).eq('user_id', user.id);
         } else {
-          await supabase.from('stock').insert(payload);
+          await supabase.from('estoque').insert(payload);
         }
         fetchInventory();
       }
@@ -225,7 +287,7 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
     if (user.id === 'demo-user') {
       setItems(prev => prev.filter(item => String(item.id) !== String(id)));
     } else {
-      await supabase.from('stock').delete().eq('id', id).eq('user_id', user.id);
+      await supabase.from('estoque').delete().eq('id', id).eq('user_id', user.id);
       fetchInventory();
     }
     setConfirmDelete({ id: '', isOpen: false });
@@ -233,8 +295,9 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
   };
 
   const filteredItems = items.filter(i => 
-    i.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    i.code?.includes(searchTerm)
+    safeString(i.name).toLowerCase().includes(searchTerm.toLowerCase()) || 
+    safeString(i.code).includes(searchTerm) ||
+    safeString(i.category).toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   if (loading) return (
@@ -294,7 +357,7 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
                 <input type="file" ref={scanInputRef} className="hidden" capture="environment" accept="image/*" onChange={handleScanReceipt} />
 
                 <button 
-                    onClick={() => { setEditingId(null); setFormData({ name: '', code: '', unit: 'KG', min_stock: '10', stock_quantity: '0', cost_per_unit: '0', supplier: '' }); setIsAddModalOpen(true); }}
+                    onClick={() => { setEditingId(null); setFormData({ name: '', category: '', code: '', unit: 'KG', min_stock: '10', quantity: '0', cost_per_unit: '0', supplier: '' }); setIsAddModalOpen(true); }}
                     className="flex-1 sm:flex-none bg-blue-600 text-white hover:bg-blue-700 font-black py-3.5 px-8 rounded-2xl flex items-center justify-center gap-2 transition-all shadow-xl shadow-blue-900/20 text-[10px] uppercase tracking-widest active:scale-95"
                 >
                     <Plus size={18} strokeWidth={3}/> Novo Item
@@ -311,6 +374,7 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
                     <tr className="uppercase font-black text-[10px] tracking-widest">
                         <th className="py-6 px-8">Código</th>
                         <th className="py-6 px-4">Ingrediente</th>
+                        <th className="py-6 px-4">Categoria</th>
                         <th className="py-6 px-4 text-center">Unidade</th>
                         <th className="py-6 px-4 text-center">Custo Unit.</th>
                         <th className="py-6 px-4 text-center">Estoque Atual</th>
@@ -320,27 +384,30 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
                 </thead>
                 <tbody className="divide-y divide-stone-800">
                     {filteredItems.map((item) => {
-                        const valorTotal = (item.stock_quantity || 0) * (item.cost_per_unit || 0);
-                        const isLow = item.stock_quantity <= item.min_stock;
+                        const valorTotal = (Number(item.quantity) || 0) * (Number(item.cost_per_unit) || 0);
+                        const isLow = (Number(item.quantity) || 0) <= (Number(item.min_stock) || 0);
                         
                         return (
                             <tr key={item.id} className="hover:bg-stone-800/20 transition-all group">
                                 <td className="py-6 px-8 font-mono text-[11px] text-stone-500 tracking-tighter">
-                                    {item.code || '---'}
+                                    {safeString(item.code) || '---'}
                                 </td>
                                 <td className="py-6 px-4 font-black text-xs text-white uppercase group-hover:text-blue-400 transition-colors">
-                                    {item.name}
+                                    {safeString(item.name)}
+                                </td>
+                                <td className="py-6 px-4 text-[10px] font-bold text-stone-500 uppercase">
+                                    {safeString(item.category)}
                                 </td>
                                 <td className="py-6 px-4 text-center">
                                     <span className="bg-stone-900 text-stone-400 px-3 py-1 rounded-lg text-[9px] font-black border border-stone-800">
-                                        {item.unit}
+                                        {safeString(item.unit)}
                                     </span>
                                 </td>
                                 <td className="py-6 px-4 text-center font-bold text-white text-sm">
-                                    R$ {Number(item.cost_per_unit).toFixed(2)}
+                                    R$ {Number(item.cost_per_unit || 0).toFixed(2)}
                                 </td>
                                 <td className={`py-6 px-4 text-center font-black text-sm ${isLow ? 'text-red-500 animate-pulse' : 'text-stone-300'}`}>
-                                    {Number(item.stock_quantity).toFixed(2)}
+                                    {Number(item.quantity || 0).toFixed(2)}
                                 </td>
                                 <td className="py-6 px-4 text-center font-black text-blue-500 text-sm">
                                     R$ {valorTotal.toFixed(2)}
@@ -388,8 +455,19 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
                               <input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-stone-900/50 border border-stone-800 p-4 rounded-2xl text-white font-bold outline-none focus:ring-2 focus:ring-blue-600 transition-all" placeholder="EX: MUSSARELA KG"/>
                           </div>
                           <div className="space-y-3">
+                              <label className="text-[10px] font-black uppercase text-stone-500 tracking-widest ml-1">Categoria</label>
+                              <input value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-stone-900/50 border border-stone-800 p-4 rounded-2xl text-white font-bold outline-none focus:ring-2 focus:ring-blue-600 transition-all" placeholder="Ex: Laticínios"/>
+                          </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                          <div className="space-y-3">
                               <label className="text-[10px] font-black uppercase text-stone-500 tracking-widest ml-1">Código de Barras/EAN</label>
                               <input value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} className="w-full bg-stone-900/50 border border-stone-800 p-4 rounded-2xl text-white font-mono outline-none focus:ring-2 focus:ring-blue-600 transition-all" placeholder="0000000000000"/>
+                          </div>
+                          <div className="space-y-3">
+                              <label className="text-[10px] font-black uppercase text-stone-500 tracking-widest ml-1">Fornecedor</label>
+                              <input value={formData.supplier} onChange={e => setFormData({...formData, supplier: e.target.value})} className="w-full bg-stone-900/50 border border-stone-800 p-4 rounded-2xl text-white font-bold outline-none focus:ring-2 focus:ring-blue-600 transition-all" placeholder="Ex: Atacadão"/>
                           </div>
                       </div>
 
@@ -406,11 +484,11 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({ user }) => {
                           </div>
                           <div className="space-y-3">
                               <label className="text-[10px] font-black uppercase text-stone-500 tracking-widest ml-1">Saldo Atual</label>
-                              <input type="number" step="0.01" required value={formData.stock_quantity} onChange={e => setFormData({...formData, stock_quantity: e.target.value})} className="w-full bg-stone-900/50 border border-stone-800 p-4 rounded-2xl text-white font-black text-center outline-none"/>
+                              <input type="number" step="0.01" required value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} className="w-full bg-stone-900/50 border border-stone-800 p-4 rounded-2xl text-white font-black text-center outline-none"/>
                           </div>
                           <div className="space-y-3">
                               <label className="text-[10px] font-black uppercase text-stone-500 tracking-widest ml-1">Custo Unit.</label>
-                              <input type="number" step="0.01" required value={formData.cost_per_unit} onChange={e => setFormData({...formData, cost_per_unit: e.target.value})} className="w-full bg-stone-900/50 border border-stone-800 p-4 rounded-2xl text-blue-400 font-black text-center outline-none"/>
+                              <input type="number" step="0.01" required value={formData.cost_per_unit} onChange={e => setFormData({...formData,cost_per_unit: e.target.value})} className="w-full bg-stone-900/50 border border-stone-800 p-4 rounded-2xl text-blue-400 font-black text-center outline-none"/>
                           </div>
                           <div className="space-y-3">
                               <label className="text-[10px] font-black uppercase text-red-500 tracking-widest ml-1">Alerta Mín.</label>

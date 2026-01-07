@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Clock, 
@@ -108,7 +109,7 @@ export const OrdersPage: React.FC<{ user: any; onAddTransaction?: any }> = ({ us
             const totalToDeduct = Number(ing.quantity) * Number(item.qtd);
             
             const { data: stockData } = await supabase
-              .from('stock')
+              .from('estoque')
               .select('stock_quantity, name')
               .eq('id', ing.stockId)
               .single();
@@ -116,7 +117,7 @@ export const OrdersPage: React.FC<{ user: any; onAddTransaction?: any }> = ({ us
             if (stockData) {
               const newQty = Math.max(0, stockData.stock_quantity - totalToDeduct);
               await supabase
-                .from('stock')
+                .from('estoque')
                 .update({ stock_quantity: newQty })
                 .eq('id', ing.stockId);
             }

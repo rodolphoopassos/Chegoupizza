@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   X, Save, Tag, DollarSign, Image as ImageIcon, LayoutGrid, 
@@ -6,6 +7,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { toast } from 'react-hot-toast';
+import { calcularCustoTotal } from '../utils/helpers';
 
 interface RecipeIngredient {
   stockId: string;
@@ -74,7 +76,7 @@ export const ItemEditor: React.FC<ItemEditorProps> = ({ item, existingCategories
   }, [item]);
 
   const fetchStock = async () => {
-    const { data } = await supabase.from('stock').select('id, name, unit, cost_per_unit').order('name');
+    const { data } = await supabase.from('estoque').select('id, name, unit, cost_per_unit').order('name');
     if (data) setStockItems(data);
   };
 
@@ -85,10 +87,15 @@ export const ItemEditor: React.FC<ItemEditorProps> = ({ item, existingCategories
 
   // --- CÁLCULOS DE CUSTO ---
   const cmvTotal = useMemo(() => {
-    return (formData.ingredientes || []).reduce((acc, ing) => {
-      const stock = stockItems.find(s => s.id === ing.stockId);
-      return acc + (stock ? stock.cost_per_unit * ing.quantity : 0);
-    }, 0);
+    // Prepara os dados para o helper calcularCustoTotal
+    const ingredientsWithCost = (formData.ingredientes || []).map(ing => {
+       const stock = stockItems.find(s => s.id === ing.stockId);
+       return {
+         quantity: ing.quantity,
+         cost_per_unit: stock?.cost_per_unit || 0
+       };
+    });
+    return calcularCustoTotal(ingredientsWithCost);
   }, [formData.ingredientes, stockItems]);
 
   const profitMargin = useMemo(() => {

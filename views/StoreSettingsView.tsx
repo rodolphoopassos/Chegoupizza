@@ -18,7 +18,8 @@ import {
   DollarSign,
   Smartphone,
   ShieldCheck,
-  AlertTriangle
+  AlertTriangle,
+  PieChart
 } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 
@@ -49,6 +50,9 @@ export const StoreSettingsView: React.FC<{ user: any }> = ({ user }) => {
   const [minOrder, setMinOrder] = useState(15.00);
   const [acceptDelivery, setAcceptDelivery] = useState(true);
   const [acceptPickup, setAcceptPickup] = useState(true);
+  
+  // Adicionado state para regra de preço
+  const [pizzaPricingRule, setPizzaPricingRule] = useState<'media' | 'maior'>('media');
 
   // States - Endereço
   const [storeAddress, setStoreAddress] = useState({
@@ -92,7 +96,6 @@ export const StoreSettingsView: React.FC<{ user: any }> = ({ user }) => {
     
     setLoading(true);
     try {
-      // Corrected: using 'id' instead of 'user_id' for this table
       const { data, error } = await supabase
         .from('configuracoes_loja')
         .select('*')
@@ -109,6 +112,10 @@ export const StoreSettingsView: React.FC<{ user: any }> = ({ user }) => {
         setMinOrder(data.pedido_minimo || 0);
         setAcceptDelivery(data.aceita_delivery ?? true);
         setAcceptPickup(data.aceita_retirada ?? true);
+        
+        // Carrega regra salva ou padrão 'media'
+        setPizzaPricingRule(data.regra_pizza || 'media');
+        
         if (data.endereco) setStoreAddress(data.endereco);
         if (data.horarios) setHours(data.horarios);
         if (data.zonas_entrega) setDeliveryZones(data.zonas_entrega);
@@ -130,6 +137,10 @@ export const StoreSettingsView: React.FC<{ user: any }> = ({ user }) => {
       pedido_minimo: minOrder,
       aceita_delivery: acceptDelivery,
       aceita_retirada: acceptPickup,
+      
+      // Salva a regra escolhida
+      regra_pizza: pizzaPricingRule,
+      
       endereco: storeAddress,
       horarios: hours,
       zonas_entrega: deliveryZones,
@@ -148,7 +159,6 @@ export const StoreSettingsView: React.FC<{ user: any }> = ({ user }) => {
     }
 
     try {
-      // Upsert by primary key 'id'
       const { error } = await supabase
         .from('configuracoes_loja')
         .upsert(payload);
@@ -325,6 +335,35 @@ export const StoreSettingsView: React.FC<{ user: any }> = ({ user }) => {
                          className={`w-14 h-8 rounded-full relative cursor-pointer transition-all ${acceptPickup ? 'bg-green-500 shadow-lg shadow-green-900/20' : 'bg-stone-300 dark:bg-stone-700'}`}
                        >
                           <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-all ${acceptPickup ? 'right-1' : 'left-1'}`}></div>
+                       </div>
+                    </div>
+
+                    <div className="h-px bg-stone-100 dark:bg-stone-900 my-8"></div>
+
+                    <div className="flex flex-col gap-4">
+                       <div>
+                          <h4 className="font-black text-stone-800 dark:text-white uppercase text-sm tracking-tight">Regra de Preço (Meio a Meio)</h4>
+                          <p className="text-[10px] text-stone-400 font-bold uppercase tracking-widest mt-1">Como calcular o valor final de pizzas com 2 sabores?</p>
+                       </div>
+                       
+                       <div className="flex gap-4">
+                          <button 
+                            onClick={() => setPizzaPricingRule('media')}
+                            className={`flex-1 p-6 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 group ${pizzaPricingRule === 'media' ? 'border-red-600 bg-red-50 dark:bg-red-900/20' : 'border-stone-100 dark:border-stone-800 bg-white dark:bg-stone-900 grayscale opacity-60 hover:opacity-100'}`}
+                          >
+                             <span className="text-2xl">⚖️</span>
+                             <span className={`text-sm font-black uppercase ${pizzaPricingRule === 'media' ? 'text-red-600' : 'text-stone-500'}`}>Cobrar Média</span>
+                             <span className="text-[9px] font-bold text-stone-400">(Sabor A + Sabor B) ÷ 2</span>
+                          </button>
+
+                          <button 
+                            onClick={() => setPizzaPricingRule('maior')}
+                            className={`flex-1 p-6 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 group ${pizzaPricingRule === 'maior' ? 'border-green-600 bg-green-50 dark:bg-green-900/20' : 'border-stone-100 dark:border-stone-800 bg-white dark:bg-stone-900 grayscale opacity-60 hover:opacity-100'}`}
+                          >
+                             <span className="text-2xl">📈</span>
+                             <span className={`text-sm font-black uppercase ${pizzaPricingRule === 'maior' ? 'text-green-600' : 'text-stone-500'}`}>Maior Valor</span>
+                             <span className="text-[9px] font-bold text-stone-400">Cobra pelo sabor mais caro</span>
+                          </button>
                        </div>
                     </div>
 

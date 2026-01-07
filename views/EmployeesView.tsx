@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
   Users, UserPlus, Clock, DollarSign, FileText, 
@@ -13,12 +12,23 @@ const formatMoney = (val: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
 // Helper para evitar erro [object Object]
-const safeString = (val: any) => {
-  if (typeof val === 'object' && val !== null) return val.nome || val.name || JSON.stringify(val);
-  return String(val || '');
+const safeString = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'boolean') return val ? 'Sim' : 'Não';
+  
+  if (typeof val === 'object') {
+    const candidate = val.nome || val.name || val.description || val.label || val.title;
+    if (candidate && (typeof candidate === 'string' || typeof candidate === 'number')) {
+        return String(candidate);
+    }
+    return ''; 
+  }
+  return String(val);
 };
 
-export const EmployeesView: React.FC<{ user: any }> = ({ user }) => {
+export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({ user, onAddTransaction }) => {
   const [activeTab, setActiveTab] = useState<'cadastro' | 'horas' | 'folha'>('cadastro');
   const [employees, setEmployees] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]); // Dados do mês (extras, dias, etc)
@@ -188,22 +198,31 @@ export const EmployeesView: React.FC<{ user: any }> = ({ user }) => {
     const totalCost = employees.reduce((acc, emp) => acc + calculatePayroll(emp).totalLiquido, 0);
     if (totalCost <= 0) return toast.error("Valor total zerado.");
 
-    // Como o financeiro também usa confirm nativo, idealmente seria portado para Modal depois,
-    // mas vamos focar na lixeira conforme solicitado.
-    const confirmed = window.confirm(`Lançar folha de ${formatMoney(totalCost)} no financeiro?`);
-    if(!confirmed) return;
+    // Mantendo o confirm aqui conforme solicitado para mexer apenas na rotina de delete
+    if (!window.confirm(`Lançar folha de ${formatMoney(totalCost)} no financeiro?`)) return;
 
-    const { error } = await supabase.from('transactions').insert([{
-      description: `Folha de Pagamento: ${monthRef}`,
-      amount: totalCost, 
-      date: new Date().toISOString().split('T')[0],
-      type: 'expense',
-      category: 'Recursos Humanos',
-      payment_method: 'PIX',
-    }]);
+    if (onAddTransaction) {
+      await onAddTransaction(
+        `Folha de Pagamento: ${monthRef}`,
+        totalCost,
+        'expense',
+        'Recursos Humanos',
+        new Date().toISOString().split('T')[0]
+      );
+      toast.success("Folha lançada com sucesso!");
+    } else {
+        const { error } = await supabase.from('transactions').insert([{
+        description: `Folha de Pagamento: ${monthRef}`,
+        amount: totalCost, 
+        date: new Date().toISOString().split('T')[0],
+        type: 'expense',
+        category: 'Recursos Humanos',
+        payment_method: 'PIX',
+        }]);
 
-    if (!error) toast.success("Folha lançada com sucesso!");
-    else toast.error("Erro ao lançar");
+        if (!error) toast.success("Folha lançada com sucesso!");
+        else toast.error("Erro ao lançar");
+    }
   };
 
   if (loading && employees.length === 0) {

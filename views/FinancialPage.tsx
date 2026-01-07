@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Calendar, Trash, Paperclip, 
@@ -17,9 +16,16 @@ const formatMoney = (val: any) => {
 };
 
 // Helper para renderizar strings de forma segura
-const safeString = (val: any) => {
-  if (typeof val === 'object' && val !== null) {
-    return val.description || val.nome || val.name || JSON.stringify(val);
+const safeString = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'object') {
+    const candidate = val.description || val.nome || val.name || val.title;
+    if (candidate && (typeof candidate === 'string' || typeof candidate === 'number')) {
+      return String(candidate);
+    }
+    return ''; 
   }
   return String(val || '');
 };

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Search, ShoppingCart, Plus, Minus, MapPin, 
@@ -9,6 +10,22 @@ import { toast } from 'react-hot-toast';
 
 // Formatador de Dinheiro
 const formatMoney = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+
+// Helper para evitar erro [object Object]
+const safeString = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') return String(val);
+  
+  if (typeof val === 'object') {
+    const candidate = val.name || val.nome || val.title || val.description || val.label;
+    if (candidate && (typeof candidate === 'string' || typeof candidate === 'number')) return String(candidate);
+    // Recursividade para objetos aninhados
+    if (candidate && typeof candidate === 'object') return safeString(candidate);
+    return '';
+  }
+  return String(val);
+};
 
 interface Product {
   id: number;
@@ -30,7 +47,22 @@ interface POSPageProps {
 
 export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
   const [products, setProducts] = useState<Product[]>([]);
-  const [cart, setCart] = useState<CartItem[]>([]);
+  
+  // Inicialização inteligente do carrinho (Persistência)
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('pos_cart_backup');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  // Salvar carrinho sempre que mudar (Salvamento Automático)
+  useEffect(() => {
+    localStorage.setItem('pos_cart_backup', JSON.stringify(cart));
+  }, [cart]);
+
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Todas');
@@ -46,18 +78,37 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
   // --- ESTADOS DO MEIO A MEIO ---
   const [isHalfModalOpen, setIsHalfModalOpen] = useState(false);
   const [firstHalf, setFirstHalf] = useState<Product | null>(null);
+  
+  // Estado da Regra de Preço (Média ou Maior Valor)
+  const [pricingRule, setPricingRule] = useState<'media' | 'maior'>('media');
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchProducts();
-  }, []);
+  }, [user]);
 
   const fetchProducts = async () => {
     setLoading(true);
-    const { data } = await supabase.from('cardapio').select('*').eq('disponivel', true);
-    if (data) {
-       const mapped = data.map((item: any) => ({
+    
+    // 1. Buscar Cardápio
+    const { data: menuData } = await supabase.from('cardapio').select('*').eq('disponivel', true);
+    
+    // 2. Buscar Regra de Preço (NOVO)
+    if (user?.id) {
+        const { data: configData } = await supabase
+            .from('configuracoes_loja')
+            .select('regra_pizza')
+            .eq('id', user.id)
+            .single();
+            
+        if (configData) {
+            setPricingRule(configData.regra_pizza || 'media');
+        }
+    }
+
+    if (menuData) {
+       const mapped = menuData.map((item: any) => ({
          id: item.id,
          name: item.nome || item.name,
          price: Number(item.preco || item.price),
@@ -85,27 +136,40 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
     if (!firstHalf) {
       // Selecionou a primeira metade
       setFirstHalf(product);
-      toast.success(`1ª Metade: ${product.name} selecionada!`);
+      toast.success(`1ª Metade: ${safeString(product.name)} selecionada!`);
     } else {
       // Selecionou a segunda metade -> Adiciona ao carrinho
-      // Regra de preço: Média ou Maior Valor (aqui usamos a média como no exemplo fornecido)
-      const avgPrice = (firstHalf.price + product.price) / 2;
-      const combinedName = `1/2 ${firstHalf.name} + 1/2 ${product.name}`;
       
+      // --- INÍCIO DA NOVA LÓGICA DE PREÇO ---
+      let finalPrice = 0;
+      
+      if (pricingRule === 'maior') {
+          // Regra Lucrativa: Maior Valor
+          finalPrice = Math.max(firstHalf.price, product.price);
+      } else {
+          // Regra Tradicional: Média
+          finalPrice = (firstHalf.price + product.price) / 2;
+      }
+      // --- FIM DA NOVA LÓGICA ---
+
+      const combinedName = `1/2 ${safeString(firstHalf.name)} + 1/2 ${safeString(product.name)}`;
+        
       const newItem: CartItem = {
-        id: Math.random(), // ID temporário
-        name: combinedName,
-        price: avgPrice,
-        category: 'Pizza Mista',
-        quantity: 1,
-        cartId: Math.random().toString(),
-        isHalf: true
+          id: Math.random(),
+          name: combinedName,
+          price: finalPrice, // Usa o preço calculado dinamicamente
+          category: 'Pizza Mista',
+          quantity: 1,
+          cartId: Math.random().toString(),
+          isHalf: true
       };
 
       setCart([...cart, newItem]);
-      toast.success("Pizza Meio a Meio adicionada!", { icon: '🌓' });
       
-      // Reseta o modal
+      // Notificação personalizada baseada na regra
+      const regraTexto = pricingRule === 'maior' ? '(Maior Valor)' : '(Média)';
+      toast.success(`Pizza Meio a Meio ${regraTexto} adicionada!`, { icon: '🌓' });
+        
       setFirstHalf(null);
       setIsHalfModalOpen(false);
     }
@@ -136,17 +200,17 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
 
     try {
       const payload = {
-        cliente_nome: finalName,
+        cliente_nome: safeString(finalName),
         cliente_telefone: null,
-        cliente_endereco: fullAddress,
+        cliente_endereco: safeString(fullAddress),
         valor_total: total,
         forma_pagamento: paymentMethod,
         taxa_entrega: Number(deliveryFee),
-        status: 'Entregue',
+        status: 'Novo',
         user_id: user?.id || null, 
         data_pedido: new Date().toISOString(),
         itens_pedido: cart.map(item => ({
-          produto: item.name,
+          produto: safeString(item.name),
           qtd: item.quantity,
           preco_unitario: item.price
         }))
@@ -158,7 +222,7 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
       // Integração com o Financeiro
       if (onAddTransaction) {
         await onAddTransaction(
-          `VENDA PDV: ${finalName} (#${data.id})`,
+          `VENDA PDV: ${safeString(finalName)} (#${data.id})`,
           total,
           'income',
           'Vendas Diretas',
@@ -168,6 +232,7 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
 
       toast.success("Venda Realizada com Sucesso! 💵");
       setCart([]);
+      localStorage.removeItem('pos_cart_backup'); // Limpeza explícita (segurança extra)
       setClientName('');
       setAddress('');
       setDeliveryFee(0);
@@ -228,7 +293,7 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
                   onClick={() => setSelectedCategory(cat)}
                   className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase whitespace-nowrap border transition-all ${selectedCategory === cat ? 'bg-red-600 border-red-600 text-white shadow-lg' : 'bg-[#0f0f0f] border-stone-800 text-stone-500 hover:border-stone-700'}`}
                 >
-                  {cat}
+                  {safeString(cat)}
                 </button>
              ))}
           </div>
@@ -250,10 +315,10 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
                      className="bg-[#161616] p-4 rounded-2xl border border-stone-800 cursor-pointer hover:border-red-600 transition-all group active:scale-95 shadow-xl"
                    >
                       <div className="flex justify-between items-start mb-2">
-                         <span className="text-[8px] font-black uppercase text-red-600 tracking-wider bg-red-600/10 px-1.5 py-0.5 rounded">{product.category}</span>
+                         <span className="text-[8px] font-black uppercase text-red-600 tracking-wider bg-red-600/10 px-1.5 py-0.5 rounded">{safeString(product.category)}</span>
                          <Plus size={14} className="text-stone-600 group-hover:text-white transition-colors"/>
                       </div>
-                      <h3 className="font-black text-xs uppercase text-white mb-1 leading-tight h-8 overflow-hidden line-clamp-2">{product.name}</h3>
+                      <h3 className="font-black text-xs uppercase text-white mb-1 leading-tight h-8 overflow-hidden line-clamp-2">{safeString(product.name)}</h3>
                       <p className="text-lg font-black text-stone-300 group-hover:text-white mt-2">{formatMoney(product.price)}</p>
                    </div>
                 ))}
@@ -270,7 +335,7 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
                       <PieChart className="text-red-600" /> Montar Meio a Meio
                    </h2>
                    <p className="text-xs text-stone-400 font-bold mt-1">
-                      {firstHalf ? `1ª Metade: ${firstHalf.name} (Escolha a próxima)` : 'Escolha o primeiro sabor da pizza'}
+                      {firstHalf ? `1ª Metade: ${safeString(firstHalf.name)} (Escolha a próxima)` : 'Escolha o primeiro sabor da pizza'}
                    </p>
                 </div>
                 <button onClick={() => setIsHalfModalOpen(false)} className="bg-stone-800 p-2 rounded-full hover:bg-red-600 text-white transition-all"><X size={20}/></button>
@@ -289,8 +354,8 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
                         : 'bg-[#1a1a1a] border-stone-800 hover:border-red-600 hover:bg-[#222]'
                      }`}
                    >
-                      <span className={`text-[9px] font-black uppercase tracking-widest mb-2 ${firstHalf?.id === product.id ? 'text-white/60' : 'text-stone-600'}`}>{product.category}</span>
-                      <h3 className="font-black text-sm text-white leading-tight flex-1 uppercase">{product.name}</h3>
+                      <span className={`text-[9px] font-black uppercase tracking-widest mb-2 ${firstHalf?.id === product.id ? 'text-white/60' : 'text-stone-600'}`}>{safeString(product.category)}</span>
+                      <h3 className="font-black text-sm text-white leading-tight flex-1 uppercase">{safeString(product.name)}</h3>
                       <div className="mt-4 flex justify-between items-end">
                         <p className={`font-black text-lg ${firstHalf?.id === product.id ? 'text-white' : 'text-stone-300'}`}>{formatMoney(product.price)}</p>
                       </div>
@@ -320,7 +385,7 @@ export const POSPage: React.FC<POSPageProps> = ({ user, onAddTransaction }) => {
                <div key={item.cartId} className="bg-[#161616] p-4 rounded-[1.8rem] border border-stone-800 flex flex-col gap-3 relative group animate-in slide-in-from-right-4">
                   <div className="flex justify-between items-start">
                      <div className="pr-8">
-                        <h4 className="font-black text-xs uppercase text-white leading-tight group-hover:text-red-500 transition-colors">{item.name}</h4>
+                        <h4 className="font-black text-xs uppercase text-white leading-tight group-hover:text-red-500 transition-colors">{safeString(item.name)}</h4>
                         <p className="text-stone-500 text-[9px] font-bold mt-1 uppercase tracking-widest">{formatMoney(item.price)}</p>
                      </div>
                      <button onClick={() => removeFromCart(item.cartId)} className="text-stone-700 hover:text-red-600 absolute top-4 right-4 transition-colors"><X size={16}/></button>
