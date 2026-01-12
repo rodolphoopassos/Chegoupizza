@@ -1,11 +1,13 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
   Users, UserPlus, Clock, DollarSign, FileText, 
-  Save, Trash, Edit, Check, AlertCircle, Send, Calendar, Loader2, X, Pencil
+  Trash, Edit, Check, AlertCircle, Send, Calendar, Loader2, X, Pencil
 } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { toast } from 'react-hot-toast';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { AttendanceModal } from '../components/rh/AttendanceModal';
 
 // Formatador de Moeda
 const formatMoney = (val: number) => 
@@ -16,28 +18,33 @@ const safeString = (val: any): string => {
   if (val === null || val === undefined) return '';
   if (typeof val === 'string') return val;
   if (typeof val === 'number') return String(val);
-  if (typeof val === 'boolean') return val ? 'Sim' : 'Não';
   
   if (typeof val === 'object') {
-    const candidate = val.nome || val.name || val.description || val.label || val.title;
-    if (candidate && (typeof candidate === 'string' || typeof candidate === 'number')) {
-        return String(candidate);
-    }
+    const candidate = val.nome || val.name;
+    if (candidate) return String(candidate);
     return ''; 
   }
   return String(val);
 };
 
-export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({ user, onAddTransaction }) => {
+export const EmployeesView: React.FC<{ user: any }> = ({ user }) => {
   const [activeTab, setActiveTab] = useState<'cadastro' | 'horas' | 'folha'>('cadastro');
   const [employees, setEmployees] = useState<any[]>([]);
-  const [events, setEvents] = useState<any[]>([]); // Dados do mês (extras, dias, etc)
+  const [events, setEvents] = useState<any[]>([]); // Dados do mês
   const [loading, setLoading] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
   
   // Estado para Edição e Exclusão
   const [editingEmp, setEditingEmp] = useState<any | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: number | null, isOpen: boolean }>({ id: null, isOpen: false });
+
+  // Estado para o Calendário Visual
+  const [calendarModal, setCalendarModal] = useState<{ 
+    isOpen: boolean; 
+    empId: number | null; 
+    empName: string; 
+    initialDays: number[];
+  }>({ isOpen: false, empId: null, empName: '', initialDays: [] });
 
   // Data de Referência (Mês/Ano)
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -59,7 +66,7 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
     const { data: empData } = await supabase.from('funcionarios').select('*').order('nome');
     if (empData) setEmployees(empData);
 
-    // 2. Busca Eventos do Mês (Extras, Dias trabalhados...)
+    // 2. Busca Eventos do Mês
     const { data: evtData } = await supabase
       .from('folha_eventos')
       .select('*')
@@ -136,15 +143,12 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
     }
   };
 
-  // --- LÓGICA DE EVENTOS (Controle de Horas/Extras) ---
+  // --- LÓGICA DE EVENTOS (Input Manual) ---
   const handleUpdateEvent = async (empId: number, field: string, value: string) => {
     const numValue = parseFloat(value) || 0;
-    
-    // Verifica se já existe registro desse funcionário neste mês
     const existingEvent = events.find(e => e.funcionario_id === empId);
 
     if (existingEvent) {
-      // Atualiza
       const { error } = await supabase
         .from('folha_eventos')
         .update({ [field]: numValue })
@@ -154,7 +158,6 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
          setEvents(events.map(e => e.id === existingEvent.id ? { ...e, [field]: numValue } : e));
       }
     } else {
-      // Cria Novo
       const { data, error } = await supabase
         .from('folha_eventos')
         .insert([{ 
@@ -167,6 +170,48 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
       if (!error && data) {
          setEvents([...events, data[0]]);
       }
+    }
+  };
+
+  // --- LÓGICA DO CALENDÁRIO VISUAL ---
+  const openCalendarFor = (emp: any) => {
+    const evt = events.find(e => e.funcionario_id === emp.id);
+    setCalendarModal({
+      isOpen: true,
+      empId: emp.id,
+      empName: safeString(emp.nome),
+      initialDays: evt?.detalhe_dias || [] 
+    });
+  };
+
+  const handleSaveCalendar = async (days: number[]) => {
+    if (!calendarModal.empId) return;
+
+    const totalDays = days.length;
+    const existingEvent = events.find(e => e.funcionario_id === calendarModal.empId);
+
+    const updates = {
+      dias_trabalhados: totalDays,
+      detalhe_dias: days
+    };
+
+    if (existingEvent) {
+       const { error } = await supabase.from('folha_eventos').update(updates).eq('id', existingEvent.id);
+       if (!error) {
+          setEvents(events.map(e => e.id === existingEvent.id ? { ...e, ...updates } : e));
+          toast.success("Frequência atualizada!");
+       }
+    } else {
+       const { data, error } = await supabase.from('folha_eventos').insert([{
+         funcionario_id: calendarModal.empId,
+         mes_ref: monthRef,
+         ...updates
+       }]).select();
+       
+       if (!error && data) {
+          setEvents([...events, data[0]]);
+          toast.success("Frequência registrada!");
+       }
     }
   };
 
@@ -198,31 +243,20 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
     const totalCost = employees.reduce((acc, emp) => acc + calculatePayroll(emp).totalLiquido, 0);
     if (totalCost <= 0) return toast.error("Valor total zerado.");
 
-    // Mantendo o confirm aqui conforme solicitado para mexer apenas na rotina de delete
-    if (!window.confirm(`Lançar folha de ${formatMoney(totalCost)} no financeiro?`)) return;
+    const confirmed = window.confirm(`Lançar folha de ${formatMoney(totalCost)} no financeiro?`);
+    if(!confirmed) return;
 
-    if (onAddTransaction) {
-      await onAddTransaction(
-        `Folha de Pagamento: ${monthRef}`,
-        totalCost,
-        'expense',
-        'Recursos Humanos',
-        new Date().toISOString().split('T')[0]
-      );
-      toast.success("Folha lançada com sucesso!");
-    } else {
-        const { error } = await supabase.from('transactions').insert([{
-        description: `Folha de Pagamento: ${monthRef}`,
-        amount: totalCost, 
-        date: new Date().toISOString().split('T')[0],
-        type: 'expense',
-        category: 'Recursos Humanos',
-        payment_method: 'PIX',
-        }]);
+    const { error } = await supabase.from('transactions').insert([{
+      description: `Folha de Pagamento: ${monthRef}`,
+      amount: totalCost, 
+      date: new Date().toISOString().split('T')[0],
+      type: 'expense',
+      category: 'Recursos Humanos',
+      payment_method: 'PIX',
+    }]);
 
-        if (!error) toast.success("Folha lançada com sucesso!");
-        else toast.error("Erro ao lançar");
-    }
+    if (!error) toast.success("Folha lançada com sucesso!");
+    else toast.error("Erro ao lançar");
   };
 
   if (loading && employees.length === 0) {
@@ -237,17 +271,24 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
   return (
     <div className="flex h-full font-sans text-white flex-col gap-6 animate-in fade-in duration-500 pb-20">
       
-      {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO */}
+      <AttendanceModal 
+        isOpen={calendarModal.isOpen}
+        onClose={() => setCalendarModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={handleSaveCalendar}
+        monthRef={monthRef}
+        initialDays={calendarModal.initialDays}
+        employeeName={calendarModal.empName}
+      />
+
       <ConfirmModal 
         isOpen={confirmDelete.isOpen}
         onCancel={() => setConfirmDelete({ id: null, isOpen: false })}
         onConfirm={executeDelete}
         loading={isActionLoading}
         title="Excluir Colaborador"
-        message="Tem certeza que deseja remover este funcionário? Os dados históricos de folha não serão apagados, mas ele não aparecerá mais nas listas ativas."
+        message="Tem certeza que deseja remover este funcionário? Os dados históricos de folha não serão apagados."
       />
 
-      {/* MODAL DE EDIÇÃO */}
       {editingEmp && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
           <div className="bg-[#161616] w-full max-w-2xl rounded-[3rem] border border-stone-800 shadow-2xl overflow-hidden animate-in zoom-in-95">
@@ -333,7 +374,6 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
         </div>
       )}
       
-      {/* HEADER */}
       <div className="flex flex-col md:flex-row justify-between items-center bg-[#161616] p-6 rounded-3xl border border-stone-800 gap-4">
          <div>
             <h1 className="text-2xl font-black uppercase flex items-center gap-2 text-blue-500 tracking-tight">
@@ -353,7 +393,6 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
          </div>
       </div>
 
-      {/* MENU DE ABAS */}
       <div className="flex flex-wrap gap-2 bg-[#161616] p-1.5 rounded-xl border border-stone-800 w-fit">
          <button onClick={() => setActiveTab('cadastro')} className={`px-5 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${activeTab === 'cadastro' ? 'bg-stone-800 text-white' : 'text-stone-500 hover:text-white'}`}>
             <UserPlus size={14}/> Cadastro
@@ -366,13 +405,10 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
          </button>
       </div>
 
-      {/* CONTEÚDO */}
       <div className="flex-1 overflow-hidden flex flex-col">
 
-         {/* ABA 1: CADASTRO */}
          {activeTab === 'cadastro' && (
            <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
-              {/* Formulário */}
               <div className="bg-[#161616] p-8 rounded-[2rem] border border-stone-800 shadow-xl">
                  <h3 className="text-xs font-black uppercase text-blue-500 mb-6 flex items-center gap-2 tracking-[0.2em]"><UserPlus size={16}/> Novo Colaborador</h3>
                  <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-end">
@@ -407,7 +443,6 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
                  </div>
               </div>
 
-              {/* Lista */}
               <div className="bg-[#161616] rounded-[2.5rem] border border-stone-800 overflow-hidden shadow-2xl">
                  <div className="overflow-x-auto">
                     <table className="w-full text-left">
@@ -461,7 +496,6 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
            </div>
          )}
 
-         {/* ABA 2: CONTROLE DE HORAS */}
          {activeTab === 'horas' && (
             <div className="bg-[#161616] rounded-[2.5rem] border border-stone-800 overflow-hidden flex flex-col h-full shadow-2xl animate-in slide-in-from-bottom-4 duration-500">
                <div className="bg-blue-600 p-6 flex justify-between items-center shadow-lg">
@@ -476,7 +510,7 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
                      <thead className="bg-[#111] text-[9px] font-black uppercase text-stone-600 tracking-[0.2em] sticky top-0 z-10 border-b border-stone-800">
                         <tr>
                            <th className="p-6">Colaborador</th>
-                           <th className="p-6 w-32 text-center">Dias Trab.</th>
+                           <th className="p-6 w-36 text-center">Dias Trab.</th>
                            <th className="p-6 w-32 text-center">Base Calc.</th>
                            <th className="p-6 w-32 text-center">Extras (R$)</th>
                            <th className="p-6 w-32 text-center">Bônus (R$)</th>
@@ -498,13 +532,22 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
                                     </div>
                                  </td>
                                  <td className="p-6">
-                                    <input 
-                                      type="text" 
-                                      className="w-full bg-[#0a0a0a] border border-stone-800 rounded-xl p-3 text-center text-xs font-black text-white outline-none focus:ring-1 focus:ring-blue-600 shadow-inner"
-                                      value={evt.dias_trabalhados || ''}
-                                      onChange={(e) => handleUpdateEvent(emp.id, 'dias_trabalhados', e.target.value)}
-                                      placeholder="0"
-                                    />
+                                    <div className="flex gap-2 items-center">
+                                       <button 
+                                          onClick={() => openCalendarFor(emp)}
+                                          className="p-3 bg-stone-800 hover:bg-blue-600 text-stone-400 hover:text-white rounded-xl transition-all"
+                                          title="Abrir Calendário"
+                                       >
+                                          <Calendar size={16}/>
+                                       </button>
+                                       <input 
+                                         type="text" 
+                                         className="w-full bg-[#0a0a0a] border border-stone-800 rounded-xl p-3 text-center text-xs font-black text-white outline-none focus:ring-1 focus:ring-blue-600 shadow-inner"
+                                         value={evt.dias_trabalhados || ''}
+                                         onChange={(e) => handleUpdateEvent(emp.id, 'dias_trabalhados', e.target.value)}
+                                         placeholder="0"
+                                       />
+                                    </div>
                                  </td>
                                  <td className="p-6 text-center">
                                     <span className="text-[11px] font-black text-stone-400">
@@ -550,11 +593,9 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
             </div>
          )}
 
-         {/* ABA 3: FOLHA DE PAGAMENTO (RESUMO) */}
          {activeTab === 'folha' && (
             <div className="flex flex-col h-full gap-8 animate-in slide-in-from-bottom-4 duration-500">
                
-               {/* Tabela de Cálculo */}
                <div className="bg-[#161616] rounded-[2.5rem] border border-stone-800 overflow-hidden flex-1 shadow-2xl flex flex-col">
                   <div className="bg-stone-900 p-6 flex justify-between items-center border-b border-stone-800">
                      <h3 className="text-sm font-black uppercase text-white flex items-center gap-3">
@@ -615,7 +656,6 @@ export const EmployeesView: React.FC<{ user: any; onAddTransaction?: any }> = ({
                   </div>
                </div>
 
-               {/* Painel Inferior */}
                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="bg-[#161616] p-10 rounded-[3rem] border border-stone-800 border-l-8 border-l-amber-600 shadow-2xl flex flex-col justify-center">
                      <h4 className="text-[10px] font-black uppercase text-amber-500 mb-6 tracking-[0.2em] flex items-center gap-2">

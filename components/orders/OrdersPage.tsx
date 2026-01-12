@@ -18,31 +18,39 @@ import {
   AlertCircle,
   Bell,
   Volume2,
-  Trash2
+  Trash2,
+  Receipt
 } from 'lucide-react';
 import { supabase } from '../../supabaseClient';
 import { printOrder } from '../../utils/printHelper';
 import { NewOrderModal } from './NewOrderModal';
 import { toast } from 'react-hot-toast';
 
+// ATUALIZAÇÃO NA INTERFACE: Adicionados campos opcionais que vêm do app de delivery
 interface OrderItem {
   produto: string;
   qtd: number;
   amount?: number;
   detalhes?: string;
+  // Novos campos de personalização
+  sabores?: string;
+  adicionais?: string;
+  observacoes?: string;
 }
 
 interface Order {
   id: number;
   data_pedido: string;
   cliente_nome: string;
-  cliente_endereco?: string;
+  cliente_endereco?: string; // Mantido para compatibilidade
+  endereco_entrega?: string; // Novo campo padrão do Delivery
   cliente_telefone?: string;
   itens_pedido: OrderItem[];
   valor_total: number;
   status: string;
   forma_pagamento?: string;
   taxa_entrega?: number;
+  change_for?: string; // Troco para
 }
 
 const STATUS_FLOW = [
@@ -58,10 +66,12 @@ export const OrdersPage: React.FC<{ user: any; onAddTransaction?: any }> = ({ us
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [isNewOrderModalOpen, setNewOrderModalOpen] = useState(false);
+  const [menuMap, setMenuMap] = useState<Record<string, string>>({}); // Mapa de Produto -> Descrição
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     fetchOrders();
+    fetchMenuDetails(); // Busca descrições dos produtos
     
     const channel = supabase
       .channel('realtime-orders-v2')
@@ -75,6 +85,58 @@ export const OrdersPage: React.FC<{ user: any; onAddTransaction?: any }> = ({ us
 
     return () => { supabase.removeChannel(channel); };
   }, [user]);
+
+  const fetchMenuDetails = async () => {
+    try {
+      const { data } = await supabase.from('cardapio').select('nome, descricao');
+      if (data) {
+        const mapping: Record<string, string> = {};
+        data.forEach(item => {
+          if (item.nome) mapping[item.nome.toUpperCase()] = item.descricao || '';
+        });
+        setMenuMap(mapping);
+      }
+    } catch (e) {
+      console.error("Erro ao buscar detalhes do cardápio", e);
+    }
+  };
+
+  // Função auxiliar melhorada para obter a descrição
+  const getProductDescription = (productName: string) => {
+    if (!productName) return null;
+    const cleanInput = productName.toUpperCase().trim();
+
+    // 1. Tenta match exato
+    if (menuMap[cleanInput]) return menuMap[cleanInput];
+
+    // 2. Tenta parsear "1/2 Sabor A + 1/2 Sabor B"
+    if (cleanInput.includes('+')) {
+       const parts = cleanInput.split('+');
+       
+       const descriptions = parts.map(part => {
+          // Remove o "1/2 ", "MEIA", espaços e normaliza
+          const cleanPart = part.replace(/1\/2/g, '').replace(/MEIA/g, '').trim();
+          
+          // Tenta encontrar direto
+          if (menuMap[cleanPart]) return menuMap[cleanPart];
+
+          // Busca Fuzzy: Procura uma chave no mapa que contenha o nome da parte (ex: "PIZZA CALABRESA" contém "CALABRESA")
+          const foundKey = Object.keys(menuMap).find(key => key.includes(cleanPart));
+          return foundKey ? menuMap[foundKey] : null;
+       }).filter(Boolean); // Remove nulos
+       
+       // Remove duplicatas e junta
+       if (descriptions.length > 0) {
+         return [...new Set(descriptions)].join(' | '); 
+       }
+    }
+    
+    // 3. Fallback: Tenta encontrar se o nome do produto contém alguma chave do menu
+    const fallbackKey = Object.keys(menuMap).find(key => cleanInput.includes(key));
+    if (fallbackKey) return menuMap[fallbackKey];
+
+    return null;
+  };
 
   const fetchOrders = async () => {
     if (!user) return;
@@ -183,7 +245,6 @@ export const OrdersPage: React.FC<{ user: any; onAddTransaction?: any }> = ({ us
   };
 
   const deleteOrder = async (id: number) => {
-    // Implementação direta sem window.confirm para evitar erros de sandbox
     try {
       const { error } = await supabase.from('pedidos').delete().eq('id', id);
       if (error) throw error;
@@ -284,21 +345,66 @@ export const OrdersPage: React.FC<{ user: any; onAddTransaction?: any }> = ({ us
                                  </div>
                               </div>
 
-                              <div className="space-y-1 mb-5">
+                              {/* DADOS DO CLIENTE E ENTREGA */}
+                              <div className="space-y-2 mb-5 border-b border-stone-800 pb-4">
                                  <p className="text-[11px] font-black text-stone-300 uppercase truncate">{order.cliente_nome}</p>
-                                 <p className="text-[9px] text-stone-500 font-bold uppercase truncate flex items-center gap-1">
-                                    <MapPin size={10}/> {order.cliente_endereco || 'BALCÃO'}
+                                 
+                                 {/* Endereço Completo (Sem Truncate) */}
+                                 <p className="text-[10px] text-stone-400 font-bold uppercase leading-tight flex items-start gap-2">
+                                    <MapPin size={12} className="shrink-0 mt-0.5 text-stone-600"/> 
+                                    {order.endereco_entrega || order.cliente_endereco || 'RETIRADA NO BALCÃO'}
                                  </p>
+
+                                 {/* Forma de Pagamento */}
+                                 {order.forma_pagamento && (
+                                    <p className="text-[10px] text-green-600/80 font-bold uppercase flex items-center gap-2">
+                                       <DollarSign size={12} className="shrink-0"/> 
+                                       {order.forma_pagamento}
+                                       {order.change_for && (
+                                          <span className="text-orange-500 ml-1"> (Troco para: {order.change_for})</span>
+                                       )}
+                                    </p>
+                                 )}
                               </div>
 
-                              <div className="bg-stone-900/80 rounded-2xl p-4 space-y-2 mb-6 border border-stone-800">
-                                 {order.itens_pedido.map((item, idx) => (
-                                    <div key={idx} className="flex justify-between items-start text-[10px]">
-                                       <span className="font-black text-stone-300 leading-tight">
-                                          <span className="text-red-600 mr-1">{item.qtd}x</span> {item.produto}
-                                       </span>
-                                    </div>
-                                 ))}
+                              {/* LISTA DE ITENS */}
+                              <div className="bg-stone-900/80 rounded-2xl p-4 space-y-4 mb-6 border border-stone-800">
+                                 {order.itens_pedido.map((item, idx) => {
+                                    const description = getProductDescription(item.produto);
+                                    
+                                    return (
+                                      <div key={idx} className="flex flex-col text-[10px] border-b border-stone-800 last:border-0 pb-2 last:pb-0">
+                                         <div className="flex justify-between items-start">
+                                            <span className="font-black text-stone-200 leading-tight text-sm">
+                                               <span className="text-red-600 mr-1">{item.qtd}x</span> {item.produto}
+                                            </span>
+                                         </div>
+                                         
+                                         {/* DESCRIÇÃO / INGREDIENTES */}
+                                         {description && (
+                                            <p className="text-xs text-stone-300 font-bold leading-normal mt-1 mb-2 pl-4 border-l-2 border-stone-700">
+                                               {description}
+                                            </p>
+                                         )}
+                                         
+                                         {/* Renderiza Sabores, Adicionais e Observações */}
+                                         <div className="pl-4 mt-0.5 space-y-0.5 text-stone-500">
+                                            {item.sabores && item.sabores !== item.produto && (
+                                               <p className="font-bold">Sabores: {item.sabores}</p>
+                                            )}
+                                            {item.adicionais && (
+                                               <p className="text-stone-400">+ {item.adicionais}</p>
+                                            )}
+                                            {item.observacoes && (
+                                               <p className="text-yellow-600 font-bold bg-yellow-900/10 px-1 rounded w-fit mt-1">Obs: {item.observacoes}</p>
+                                            )}
+                                            {item.detalhes && !item.observacoes && (
+                                               <p className="italic">Det: {item.detalhes}</p>
+                                            )}
+                                         </div>
+                                      </div>
+                                    );
+                                 })}
                               </div>
 
                               <div className="flex items-center justify-between">

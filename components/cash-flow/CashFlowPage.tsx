@@ -11,10 +11,15 @@ import {
   Play, 
   XCircle,
   TrendingUp,
-  TrendingDown,
+  TrendingDown, 
   History,
-  Lock
+  Lock,
+  Users,
+  CheckSquare,
+  Square
 } from 'lucide-react';
+import { supabase } from '../../supabaseClient';
+import { toast } from 'react-hot-toast';
 import { Transaction } from '../../types';
 
 interface CashFlowPageProps {
@@ -33,18 +38,35 @@ export const CashFlowPage: React.FC<CashFlowPageProps> = ({ transactions, user }
     const saved = localStorage.getItem('cashier_opening');
     return saved ? JSON.parse(saved) : {
       time: '17:00',
-      responsible: user?.email?.split('@')[0] || 'rodmastter',
+      responsible: user?.email?.split('@')[0] || 'gerente',
       balance: 0
     };
   });
 
   const [physicalCash, setPhysicalCash] = useState<number>(0);
+  
+  // --- NOVOS ESTADOS PARA O CHECKLIST DE PRESENÇA ---
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [selectedEmployees, setSelectedEmployees] = useState<number[]>([]);
 
   // Sync state with localStorage
   useEffect(() => {
     localStorage.setItem('cashier_status', isCashierOpen ? 'open' : 'closed');
     localStorage.setItem('cashier_opening', JSON.stringify(openingData));
   }, [isCashierOpen, openingData]);
+
+  // Busca Funcionários Ativos ao carregar
+  useEffect(() => {
+    const fetchEmployees = async () => {
+      const { data } = await supabase
+        .from('funcionarios')
+        .select('id, nome')
+        .eq('ativo', true)
+        .order('nome');
+      if (data) setEmployees(data);
+    };
+    fetchEmployees();
+  }, []);
 
   // Filtrar transações de HOJE
   const todayTransactions = useMemo(() => {
@@ -95,13 +117,85 @@ export const CashFlowPage: React.FC<CashFlowPageProps> = ({ transactions, user }
     setIsCashierOpen(true);
   };
 
-  const handleCloseCashier = () => {
+  // --- LÓGICA DE REGISTRO DE PRESENÇA AUTOMÁTICO ---
+  const registerAttendance = async () => {
+    if (selectedEmployees.length === 0) return;
+
+    const today = new Date();
+    const day = today.getDate(); // Dia numérico (ex: 15)
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const monthRef = `${year}-${month}`; // YYYY-MM
+
+    // Busca registros existentes deste mês para os funcionários selecionados
+    const { data: existingEvents } = await supabase
+      .from('folha_eventos')
+      .select('*')
+      .eq('mes_ref', monthRef)
+      .in('funcionario_id', selectedEmployees);
+
+    const updates = selectedEmployees.map(async (empId) => {
+      const evt = existingEvents?.find(e => e.funcionario_id === empId);
+
+      if (evt) {
+        // Se já existe registro no mês, atualiza
+        let currentDays = evt.detalhe_dias || [];
+        
+        // Garante que é array
+        if (typeof currentDays === 'string') {
+             try { currentDays = JSON.parse(currentDays); } catch { currentDays = []; }
+        }
+        if (!Array.isArray(currentDays)) currentDays = [];
+
+        // Adiciona o dia se ainda não estiver lá (evita duplicar se fechar caixa 2x)
+        if (!currentDays.includes(day)) {
+           const newDays = [...currentDays, day].sort((a:number, b:number) => a - b);
+           await supabase
+             .from('folha_eventos')
+             .update({
+               dias_trabalhados: newDays.length,
+               detalhe_dias: newDays
+             })
+             .eq('id', evt.id);
+        }
+      } else {
+        // Se não existe, cria novo registro para o mês
+        await supabase.from('folha_eventos').insert([{
+           funcionario_id: empId,
+           mes_ref: monthRef,
+           dias_trabalhados: 1,
+           detalhe_dias: [day], // Cria array com o dia de hoje
+           valor_extras: 0,
+           valor_bonus: 0,
+           valor_descontos: 0,
+           valor_comissoes: 0
+        }]);
+      }
+    });
+
+    await Promise.all(updates);
+    toast.success(`Presença registrada para ${selectedEmployees.length} colaboradores!`, { icon: '📅' });
+  };
+
+  const handleCloseCashier = async () => {
     if (hasDivergence) {
       if (!confirm(`Atenção: Existe uma divergência de R$ ${difference.toFixed(2)}. Deseja fechar assim mesmo?`)) return;
     }
+    
+    // 1. Registra Presenças
+    await registerAttendance();
+
+    // 2. Fecha o Caixa
     setIsCashierOpen(false);
     setPhysicalCash(0);
-    alert("Movimento encerrado com sucesso!");
+    setSelectedEmployees([]); // Limpa seleção
+    alert("Movimento encerrado e presenças registradas com sucesso!");
+  };
+
+  const toggleEmployee = (id: number) => {
+    setSelectedEmployees(prev => 
+      prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]
+    );
   };
 
   if (!isCashierOpen) {
@@ -363,11 +457,46 @@ export const CashFlowPage: React.FC<CashFlowPageProps> = ({ transactions, user }
               </div>
            </div>
         </div>
+
+        {/* --- NOVO: CHECKLIST DE EQUIPE (PRESENÇA) --- */}
+        <div className="bg-stone-50 dark:bg-[#18181b] p-8 border-t border-stone-200 dark:border-stone-800">
+          <div className="flex flex-col gap-4">
+             <div className="flex items-center gap-2 text-stone-500 mb-2">
+                <Users size={16} />
+                <h4 className="text-[10px] font-black uppercase tracking-[0.2em]">Checklist de Equipe: Quem trabalhou hoje?</h4>
+             </div>
+             <div className="flex flex-wrap gap-3">
+                {employees.map(emp => {
+                   const isSelected = selectedEmployees.includes(emp.id);
+                   return (
+                      <button
+                        key={emp.id}
+                        onClick={() => toggleEmployee(emp.id)}
+                        className={`flex items-center gap-3 px-6 py-4 rounded-xl border-2 transition-all ${
+                           isSelected 
+                           ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-900/30' 
+                           : 'bg-white dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-500 hover:border-blue-400'
+                        }`}
+                      >
+                         {isSelected ? <CheckSquare size={18}/> : <Square size={18}/>}
+                         <span className="text-xs font-bold uppercase tracking-tight">{emp.nome}</span>
+                      </button>
+                   );
+                })}
+                {employees.length === 0 && (
+                   <span className="text-xs text-stone-500 italic">Nenhum funcionário ativo encontrado.</span>
+                )}
+             </div>
+             <p className="text-[9px] text-stone-400 font-bold uppercase tracking-widest mt-2 ml-1">
+                * Os funcionários selecionados receberão presença automaticamente no RH.
+             </p>
+          </div>
+        </div>
         
-        <div className="bg-stone-50 dark:bg-[#18181b] p-6 flex flex-col md:flex-row justify-between items-center border-t border-stone-200 dark:border-stone-800 gap-4">
+        <div className="bg-stone-100 dark:bg-[#0f0f0f] p-6 flex flex-col md:flex-row justify-between items-center border-t border-stone-200 dark:border-stone-800 gap-4">
            <div className="flex items-center gap-3">
               <History size={18} className="text-stone-500" />
-              <p className="text-[10px] text-stone-500 font-bold uppercase tracking-widest">Atenção: Revise todos os lançamentos antes do fechamento definitivo.</p>
+              <p className="text-[10px] text-stone-500 font-bold uppercase tracking-widest">Atenção: Revise lançamentos e presença antes de encerrar.</p>
            </div>
            <button 
              onClick={handleCloseCashier}
